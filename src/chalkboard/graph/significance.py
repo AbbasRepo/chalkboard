@@ -128,12 +128,10 @@ class SignificanceGate:
     ) -> None:
         self.session = session
         self.query = query if query is not None else load_query()
-        # An empty value in .env is common - a key with nothing after the
-        # equals sign. Treat it as absent rather than crashing on float('').
         self.threshold = (
             threshold
             if threshold is not None
-            else float(os.environ.get("SIGNIFICANCE_THRESHOLD") or 1.8)
+            else float(os.environ.get("SIGNIFICANCE_THRESHOLD", "1.8"))
         )
         self.window_s = window_s
         self.cooldown_s = cooldown_s
