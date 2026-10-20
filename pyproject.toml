@@ -1,0 +1,29 @@
+[project]
+name = "chalkboard"
+version = "0.1.0"
+description = "The tactics board that answers back - explainable match intelligence from synthetic football events"
+requires-python = ">=3.11"
+dependencies = [
+    "neo4j>=5.0",
+    "pyyaml>=6.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+chalkboard-generator = "chalkboard.generator.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

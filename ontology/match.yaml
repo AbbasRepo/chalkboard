@@ -1,0 +1,65 @@
+# Chalkboard match ontology.
+#
+# THE file to read first. It describes the entire data model: how a synthetic
+# match event becomes nodes and relationships in the graph.
+#
+# Hard rule: this file describes STRUCTURE only. No conditions, no loops, no
+# expressions. The moment it needs one of those, the logic belongs in
+# graph/loader.py instead. A config language that grows a brain is a
+# programming language nobody documented.
+
+nodes:
+  Match:
+    key: match_id
+    properties: [competition, venue, period, clock_s, score_home, score_away]
+  Team:
+    key: team_id
+    properties: [name, formation, style]
+  Player:
+    key: player_id
+    properties: [name, shirt_number, position]
+  Possession:
+    key: possession_id
+    properties: [team_id, start_zone, end_reason, event_count]
+  Event:
+    key: event_id
+    properties:
+      - type
+      - outcome
+      - clock_s
+      - start_x
+      - start_y
+      - end_x
+      - end_y
+      - shot_xg
+      - pressure
+      - pass_difficulty
+      - pass_distance_m
+      - pass_progressive
+      - ball_speed_ms
+      - shot_speed_ms
+
+# Structural edges: written once per event, never revisited.
+edges:
+  - type: PART_OF
+    from: {node: Possession, key: possession_id}
+    to:   {node: Match,      key: match_id}
+  - type: HOLDS
+    from: {node: Possession, key: possession_id}
+    to:   {node: Event,      key: event_id}
+  - type: ACTED_IN
+    from: {node: Player, key: player_id}
+    to:   {node: Event,  key: event_id}
+    properties: [outcome]
+  - type: BELONGS_TO
+    from: {node: Player, key: player_id}
+    to:   {node: Team,   key: team_id}
+
+# Derived edges are NOT built here. They are recomputed on a timer by
+# derived.cypher, because they aggregate over a window rather than mapping
+# one event. Listed for documentation only.
+derived:
+  - PASSES_TO       # Player -> Player   count, progressive, mean difficulty
+  - PRESSED_INTO    # Team   -> Zone     turnovers forced, mean pressure
+  - NEMESIS_OF      # Player -> Player   duels, win rate
+  - LINKS_WITH      # Player -> Player   shared possessions, mean progression
