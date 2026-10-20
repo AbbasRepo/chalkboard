@@ -5,10 +5,28 @@
 Chalkboard turns a live stream of synthetic football events into explainable
 match intelligence, personalised for whoever's watching.
 
-Five specialist agents work over a shared live match graph, on Microsoft
-Foundry. A configurable match simulator produces the football-realistic event
-data they reason about — no real match data is used anywhere in this project,
-and all clubs, venues and players are invented.
+Two specialist agents work over a shared live match graph. A configurable
+match simulator produces the football-realistic event data they reason about —
+no real match data is used anywhere in this project, and all clubs, venues and
+players are invented.
+
+**The principle: the graph reasons, the model narrates.** Significance is
+computed by a Cypher query over the live match graph, not guessed by a model.
+The agents only narrate what the graph has already proven.
+
+## Stack
+
+| | |
+| --- | --- |
+| Orchestration | Microsoft Agent Framework |
+| Inference | GitHub Copilot CLI |
+| Agent tools | MCP server over the match graph |
+| Development | GitHub Copilot Agent Mode, Claude Code |
+| CI | GitHub Actions |
+| Graph | Neo4j AuraDB Free |
+
+Azure deployment is specified in `infra/main.bicep`. It is validated but
+**not deployed** — the project runs locally.
 
 ---
 
