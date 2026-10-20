@@ -59,7 +59,7 @@ DEFAULT_MAPPING = Path(__file__).resolve().parents[3] / "ontology" / "match.yaml
 #: Carried on every action edge. Without the temporal spine nothing can be
 #: ordered; without match_id, aggregates over shared Zone nodes silently mix
 #: fixtures together.
-SPINE = ("clock_s", "period", "match_id", "possession_id", "sequence", "outcome")
+SPINE = ("event_id", "clock_s", "period", "match_id", "possession_id", "sequence", "outcome")
 
 
 class Session(Protocol):
