@@ -181,6 +181,7 @@ class OntologyLoader:
             self._queue_edge(
                 rule["type"], src["node"], self.keys[src["node"]], a,
                 dst["node"], self.keys[dst["node"]], b, props,
+                temporal=True,
             )
 
         self.counts["events"] += 1
@@ -268,17 +269,32 @@ class OntologyLoader:
     def _queue_edge(
         self, rel: str, from_label: str, from_key: str, a: Any,
         to_label: str, to_key: str, b: Any, props: dict[str, Any],
+        temporal: bool = False,
     ) -> None:
-        signature = f"{rel}|{from_label}|{from_key}|{to_label}|{to_key}"
+        """Queue one relationship.
+
+        ``temporal`` decides what identifies it, and the two cases are
+        genuinely different:
+
+        * An **action** is identified by its endpoints *and its moment*. Two
+          players pass to each other many times in a match and each pass is
+          its own relationship with its own evidence value, so clock_s and
+          sequence join the merge key.
+        * A **structural** edge is identified by its endpoints alone. There
+          is one ADJACENT_TO between two zones, one PLAYS_FOR between a
+          player and their club. These carry no timestamp, and Neo4j refuses
+          to merge on a null property - so they must not be keyed on one.
+        """
+        clean = {k: v for k, v in props.items() if v is not None}
+        keyed = temporal and clean.get("clock_s") is not None
+
+        signature = f"{rel}|{from_label}|{from_key}|{to_label}|{to_key}|{int(keyed)}"
         self._edge_spec[signature] = {
             "type": rel, "from_label": from_label, "from_key": from_key,
-            "to_label": to_label, "to_key": to_key,
+            "to_label": to_label, "to_key": to_key, "keyed": keyed,
         }
-        clean = {k: v for k, v in props.items() if v is not None}
-        # An edge is identified by its endpoints AND its moment: two players
-        # pass to each other many times in a match, and each pass is its own
-        # relationship with its own evidence value.
-        ident = (a, b, clean.get("clock_s"), clean.get("sequence"))
+
+        ident = (a, b, clean.get("clock_s"), clean.get("sequence")) if keyed else (a, b)
         bucket = self._edge_rows[signature]
         row = bucket.get(ident)
         if row is None:
@@ -309,12 +325,17 @@ class OntologyLoader:
         for signature, bucket in self._edge_rows.items():
             spec = self._edge_spec[signature]
             rows = list(bucket.values())
+            merge = (
+                f"MERGE (a)-[r:{spec['type']} {{clock_s: row.props.clock_s, "
+                f"sequence: row.props.sequence}}]->(b)"
+                if spec["keyed"]
+                else f"MERGE (a)-[r:{spec['type']}]->(b)"
+            )
             self.session.run(
                 f"UNWIND $rows AS row "
                 f"MATCH (a:{spec['from_label']} {{{spec['from_key']}: row.a}}) "
                 f"MATCH (b:{spec['to_label']} {{{spec['to_key']}: row.b}}) "
-                f"MERGE (a)-[r:{spec['type']} {{clock_s: row.props.clock_s, "
-                f"sequence: row.props.sequence}}]->(b) "
+                f"{merge} "
                 f"SET r += row.props",
                 rows=rows,
             )
