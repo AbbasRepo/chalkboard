@@ -221,3 +221,33 @@ def test_constraints_cover_every_node_key(mapping):
 
 def test_spine_is_what_the_mapping_expects():
     assert "match_id" in SPINE and "clock_s" in SPINE
+
+
+def test_structural_edges_are_not_keyed_on_a_timestamp(mapping, match_lines):
+    """Neo4j refuses to MERGE a relationship on a null property.
+
+    Structural edges carry no clock_s, so keying them on one fails at the
+    database rather than in the fake session. This test checks the generated
+    Cypher directly, because that is where the mistake lives.
+    """
+    _meta, lines = match_lines
+    session, _ = load(mapping, lines)
+    for query, _params in session.calls:
+        if "MERGE (a)-[" not in query:
+            continue
+        structural = any(
+            f"r:{rel}]" in query or f"r:{rel} " in query
+            for rel in ("ADJACENT_TO", "PLAYS_FOR", "PLAYED_IN", "HOME_TEAM",
+                        "AWAY_TEAM", "OFFICIATED_BY", "PLAYED_AT", "IN_COMPETITION")
+        )
+        if structural:
+            assert "clock_s: row.props.clock_s" not in query, query[:120]
+
+
+def test_action_edges_are_keyed_on_the_moment(mapping, match_lines):
+    """Repeated passes between the same pair must stay distinct."""
+    _meta, lines = match_lines
+    session, _ = load(mapping, lines)
+    passes = [q for q, _ in session.calls if "r:PASSED_TO {" in q]
+    assert passes, "PASSED_TO should merge on clock_s and sequence"
+    assert all("clock_s: row.props.clock_s" in q for q in passes)

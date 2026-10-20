@@ -188,6 +188,11 @@ class MatchSimulator:
                         recovery,
                         possession_id,
                         index,
+                        # The duel has two participants: the player who won
+                        # the ball and the one who lost it. Naming both makes
+                        # DISPOSSESSED an edge between players rather than a
+                        # fact about empty space.
+                        related_player_id=carrier.player_id,
                         start_x=100.0 - end_x,
                         start_y=100.0 - end_y,
                         pressure=round(pressure, 3),

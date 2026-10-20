@@ -162,9 +162,11 @@ actions:
 
   - type: DISPOSSESSED
     source_type: [TACKLE, INTERCEPTION]
-    from: {node: Player, key: player_id}
-    to:   {node: Zone, key: start_zone}
-    properties: [pressure, opponents_within_5m]
+    from: {node: Player, key: player_id}          # won the ball
+    to:   {node: Player, key: related_player_id}  # lost it
+    properties: [pressure, opponents_within_5m, start_zone]
+    # Two participants, so an edge. The zone rides as a property; the
+    # team-level view of where turnovers cluster is the derived PRESSES_IN.
 
   - type: PRESSED_IN
     source_type: [PRESSURE]
