@@ -82,14 +82,29 @@ class Explainer:
         client: ModelClient,
         tools: GraphTools | None = None,
         strict: bool = True,
+        store: Any = None,
     ) -> None:
         self.client = client
         self.tools = tools
         self.strict = strict
+        #: Optional InsightStore. When present, a sentence written on an
+        #: earlier run is reused rather than paid for again - seventeen
+        #: seconds and real money per call through the Copilot CLI.
+        self.store = store
 
     # ------------------------------------------------------------- public
 
     def explain(self, moment: Moment) -> Insight:
+        """Three tiers, in order of cost.
+
+        A stored sentence first, a live model call if there is none, and the
+        graph-only summary if that fails or is switched off. Every tier is
+        correct; they differ in fluency and price.
+        """
+        cached = self._cached(moment)
+        if cached:
+            return cached
+
         facts = self.build_facts(moment)
         fallback = moment.summary()
 
@@ -108,7 +123,7 @@ class Explainer:
                 rejected = f"{reason}: {candidate}"
                 log.warning("rejected ungrounded sentence - %s", rejected)
 
-        return Insight(
+        insight = Insight(
             insight_id=uuid.uuid4().hex[:12],
             match_id=moment.match_id,
             clock_s=moment.clock_s,
@@ -119,6 +134,30 @@ class Explainer:
             about_players=moment.players,
             about_zones=moment.zones,
             rejected=rejected,
+        )
+        if self.store:
+            try:
+                self.store.save(insight, moment.zones)
+            except Exception as error:  # noqa: BLE001
+                log.warning("could not persist insight: %s", error)
+        return insight
+
+    def _cached(self, moment: Moment) -> Insight | None:
+        if not self.store:
+            return None
+        found = self.store.find(moment.match_id, moment.clock_s)
+        if not found:
+            return None
+        return Insight(
+            insight_id=found["insight_id"],
+            match_id=moment.match_id,
+            clock_s=moment.clock_s,
+            score=moment.score,
+            sentence=found["sentence"],
+            source="stored",
+            evidence_ids=[e["event_id"] for e in moment.evidence],
+            about_players=moment.players,
+            about_zones=moment.zones,
         )
 
     # -------------------------------------------------------------- facts

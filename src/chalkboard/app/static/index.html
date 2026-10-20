@@ -1,1 +1,287 @@
-<!-- Two panes plus the live subgraph. TODO(WP4). -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chalkboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --slate:#1b2630;        /* the board */
+  --slate-up:#243240;     /* raised surface */
+  --chalk:#e9e5d9;        /* chalk white, slightly warm */
+  --chalk-dim:#8d9aa5;
+  --chalk-faint:#4a5a67;
+  --pitch:#5f9e70;        /* the analyst's colour */
+  --mark:#d9a95c;         /* the supporter's colour */
+  --alert:#c4604f;
+  --rule:rgba(233,229,217,.14);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--slate);color:var(--chalk);
+  font:16px/1.55 "Source Sans 3",system-ui,sans-serif;
+  display:flex;flex-direction:column;
+}
+.num{font-family:"Barlow Condensed",system-ui,sans-serif;font-variant-numeric:tabular-nums}
+
+/* ---------- scoreboard ---------- */
+header{
+  display:flex;align-items:baseline;gap:1.5rem;
+  padding:.9rem 1.5rem;border-bottom:1px solid var(--rule);
+  background:var(--slate-up);flex-wrap:wrap;
+}
+.wordmark{font-family:"Barlow Condensed";font-size:1.6rem;font-weight:600;letter-spacing:.01em}
+.wordmark span{color:var(--chalk-dim);font-weight:400}
+.score{font-family:"Barlow Condensed";font-size:2rem;font-weight:600;letter-spacing:.02em}
+.score em{color:var(--chalk-dim);font-style:normal;padding:0 .35rem}
+.clock{font-family:"Barlow Condensed";font-size:1.8rem;color:var(--mark)}
+.venue{color:var(--chalk-dim);font-size:.9rem}
+.forecast{margin-left:auto;color:var(--chalk-dim);font-size:.88rem;text-align:right}
+
+/* ---------- controls ---------- */
+.controls{display:flex;gap:.6rem;align-items:center;padding:.6rem 1.5rem;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+select,button{
+  font:inherit;font-size:.9rem;color:var(--chalk);
+  background:var(--slate-up);border:1px solid var(--rule);
+  border-radius:2px;padding:.35rem .7rem;cursor:pointer;
+}
+button:hover,select:hover{border-color:var(--chalk-dim)}
+button:focus-visible,select:focus-visible{outline:2px solid var(--mark);outline-offset:2px}
+button.live{border-color:var(--pitch);color:var(--pitch)}
+button.off{border-color:var(--alert);color:var(--alert)}
+.state{color:var(--chalk-dim);font-size:.85rem;margin-left:auto}
+
+/* ---------- layout ---------- */
+main{flex:1;display:grid;grid-template-columns:1fr 1fr 420px;gap:1px;background:var(--rule);min-height:0}
+section{background:var(--slate);display:flex;flex-direction:column;min-height:0;min-width:0}
+.pane-head{padding:.7rem 1.2rem;border-bottom:1px solid var(--rule);display:flex;align-items:baseline;gap:.6rem}
+.pane-head h2{margin:0;font-family:"Barlow Condensed";font-size:1.25rem;font-weight:600}
+.pane-head .who{color:var(--chalk-dim);font-size:.85rem}
+#analyst .pane-head h2{color:var(--pitch)}
+#fan .pane-head h2{color:var(--mark)}
+.feed{flex:1;overflow-y:auto;padding:.6rem 1.2rem 2rem;scrollbar-width:thin}
+
+/* ---------- insight lines ---------- */
+.line{padding:.75rem 0;border-bottom:1px solid var(--rule)}
+.line .min{font-family:"Barlow Condensed";font-size:1.05rem;color:var(--chalk-dim);margin-right:.5rem}
+.line p{margin:.25rem 0 0}
+.line.quiet p{color:var(--chalk-faint);font-style:italic}
+.tag{font-size:.72rem;color:var(--chalk-dim);border:1px solid var(--rule);border-radius:2px;padding:.05rem .35rem;margin-left:.4rem}
+.tag.graph{color:var(--pitch);border-color:rgba(95,158,112,.4)}
+.tag.stored{color:var(--mark);border-color:rgba(217,169,92,.4)}
+.empty{color:var(--chalk-faint);padding:2rem 0}
+
+/* ---------- the board ---------- */
+#board{border-left:1px solid var(--rule)}
+#board .pane-head h2{color:var(--chalk)}
+#evidence{flex:1;display:flex;flex-direction:column;min-height:0}
+svg{width:100%;flex:1;min-height:260px}
+.chalk-line{stroke:var(--chalk-dim);stroke-width:1.4;fill:none;stroke-linecap:round}
+.chalk-line.hot{stroke:var(--mark);stroke-width:2.2}
+.node circle{fill:var(--slate-up);stroke:var(--chalk-dim);stroke-width:1.4}
+.node.lead circle{stroke:var(--mark);stroke-width:2.2}
+.node text{fill:var(--chalk);font-family:"Barlow Condensed";font-size:12px;text-anchor:middle}
+.zone{fill:rgba(95,158,112,.10);stroke:rgba(95,158,112,.45);stroke-width:1}
+.zone-label{fill:var(--pitch);font-family:"Barlow Condensed";font-size:11px}
+.facts{border-top:1px solid var(--rule);padding:.7rem 1.2rem;max-height:34%;overflow-y:auto;font-size:.85rem}
+.facts div{color:var(--chalk-dim);padding:.18rem 0}
+.facts .id{color:var(--chalk-faint);font-size:.75rem}
+@media (max-width:1100px){main{grid-template-columns:1fr;grid-template-rows:auto auto 1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wordmark">Chalkboard <span>— the tactics board that answers back</span></div>
+  <div class="score num"><b id="home">—</b> <span id="sh">0</span><em>:</em><span id="sa">0</span> <b id="away">—</b></div>
+  <div class="clock num" id="clock">0'</div>
+  <div class="venue" id="venue"></div>
+  <div class="forecast" id="forecast"></div>
+</header>
+
+<div class="controls">
+  <select id="match"></select>
+  <select id="follow"><option value="">Following: nobody yet</option></select>
+  <select id="language">
+    <option value="en">English</option>
+    <option value="Spanish">Spanish</option>
+    <option value="Arabic">Arabic</option>
+    <option value="Japanese">Japanese</option>
+  </select>
+  <select id="speed">
+    <option value="20">20× — 4½ minutes</option>
+    <option value="40">40×</option>
+    <option value="90" selected>90× — 1 minute</option>
+  </select>
+  <button id="start">Start the match</button>
+  <button id="model" class="live">Model on</button>
+  <span class="state" id="state">Not connected</span>
+</div>
+
+<main>
+  <section id="analyst">
+    <div class="pane-head"><h2>Analyst</h2><span class="who">patterns, causes, numbers</span></div>
+    <div class="feed" id="feed-analyst"><p class="empty">Press start. Commentary appears when the graph judges a passage worth explaining.</p></div>
+  </section>
+
+  <section id="fan">
+    <div class="pane-head"><h2>Supporter</h2><span class="who" id="fan-who">following nobody</span></div>
+    <div class="feed" id="feed-fan"><p class="empty">Pick a player to follow. You will only hear about moments they were part of.</p></div>
+  </section>
+
+  <section id="board">
+    <div class="pane-head"><h2>The evidence</h2><span class="who" id="ev-count"></span></div>
+    <div id="evidence">
+      <svg id="graph" viewBox="0 0 420 320" role="img" aria-label="The actions behind the current sentence"></svg>
+      <div class="facts" id="facts"><div class="id">Nothing yet. Every sentence on the left is drawn from the actions shown here.</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let source = null, squad = [], teams = {};
+
+// ---------------------------------------------------------------- setup
+fetch('/api/matches').then(r => r.json()).then(list => {
+  $('match').innerHTML = list.map(m =>
+    `<option value="${m.match_id}">MW${m.matchweek} · ${m.home} v ${m.away}</option>`).join('');
+}).catch(() => $('state').textContent = 'Graph unreachable');
+
+fetch('/api/model').then(r => r.json()).then(setModelButton);
+
+function setModelButton(s){
+  const b = $('model');
+  b.textContent = s.enabled ? 'Model on' : 'Model off — graph only';
+  b.className = s.enabled ? 'live' : 'off';
+  b.dataset.enabled = s.enabled;
+}
+
+$('model').onclick = () => {
+  const next = $('model').dataset.enabled !== 'true';
+  fetch('/api/model?enabled=' + next, {method:'POST'}).then(r => r.json()).then(setModelButton);
+};
+
+$('follow').onchange = () => {
+  const name = $('follow').selectedOptions[0].dataset.name || 'nobody';
+  $('fan-who').textContent = 'following ' + name;
+};
+
+$('start').onclick = () => {
+  if (source) source.close();
+  ['feed-analyst','feed-fan'].forEach(id => $(id).innerHTML = '');
+  const q = new URLSearchParams({
+    match: $('match').value,
+    speed: $('speed').value,
+    language: $('language').value,
+  });
+  const follow = $('follow').selectedOptions[0]?.dataset.name;
+  if (follow) q.set('follow', follow);
+
+  source = new EventSource('/api/stream?' + q);
+  $('state').textContent = 'Live';
+  source.onmessage = e => handle(JSON.parse(e.data));
+  source.onerror = () => { $('state').textContent = 'Stream ended'; source.close(); };
+};
+
+// ------------------------------------------------------------- handling
+function handle(m){
+  if (m.type === 'header') return header(m);
+  if (m.type === 'clock')  return clock(m);
+  if (m.type === 'insight')return insight(m);
+  if (m.type === 'full_time') { $('state').textContent = 'Full time'; return; }
+  if (m.type === 'error') { $('state').textContent = m.message; }
+}
+
+function header(m){
+  $('home').textContent = m.home || '';
+  $('away').textContent = m.away || '';
+  $('venue').textContent = [m.stadium, m.home_style && m.home_style + ' v ' + m.away_style]
+                             .filter(Boolean).join(' · ');
+  if (m.p_home != null)
+    $('forecast').textContent =
+      `Before kick-off: ${m.home} ${Math.round(m.p_home*100)}% · draw ${Math.round(m.p_draw*100)}% · ${m.away} ${Math.round(m.p_away*100)}%`;
+
+  squad = m.squad || [];
+  teams = {}; squad.forEach(p => teams[p.name] = p.team);
+  $('follow').innerHTML = '<option value="">Following: nobody</option>' +
+    squad.map(p => `<option value="${p.player_id}" data-name="${p.name}">${p.team} ${p.shirt} ${p.name}</option>`).join('');
+}
+
+function clock(m){
+  $('clock').textContent = m.minute + "'";
+  const h = $('home').textContent, a = $('away').textContent;
+  $('sh').textContent = m.score[h] || 0;
+  $('sa').textContent = m.score[a] || 0;
+}
+
+function insight(m){
+  const grounded = m.insight.source === 'graph';
+  for (const r of m.renderings){
+    const feed = $(r.persona === 'analyst' ? 'feed-analyst' : 'feed-fan');
+    const el = document.createElement('div');
+    el.className = 'line' + (r.source === 'quiet' ? ' quiet' : '');
+    el.innerHTML =
+      `<span class="min num">${m.minute}'</span>` +
+      (r.source === 'graph' ? '<span class="tag graph">from the graph</span>' : '') +
+      (m.insight.source === 'stored' && r.source !== 'quiet' ? '<span class="tag stored">written earlier</span>' : '') +
+      `<p></p>`;
+    el.querySelector('p').textContent = r.text;
+    feed.prepend(el);
+  }
+  drawEvidence(m.evidence, m.insight);
+}
+
+// ------------------------------------------------------- the chalk board
+function drawEvidence(evidence, insight){
+  const svg = $('graph');
+  $('ev-count').textContent = evidence.length + ' actions behind this sentence';
+
+  const people = [...new Set(evidence.flatMap(e => [e.actor, e.target].filter(Boolean)))];
+  const zones  = [...new Set(evidence.map(e => e.zone).filter(Boolean))];
+  const lead   = insight.about_players[0];
+
+  const W = 420, H = 320, cx = W/2, cy = 150, R = 105;
+  const at = i => [cx + R*Math.cos(-Math.PI/2 + 2*Math.PI*i/people.length),
+                   cy + R*Math.sin(-Math.PI/2 + 2*Math.PI*i/people.length)];
+  const pos = {}; people.forEach((p,i) => pos[p] = at(i));
+
+  let out = '';
+  zones.forEach((z,i) => {
+    out += `<rect class="zone" x="${16 + i*96}" y="${H-54}" width="88" height="34" rx="2"/>` +
+           `<text class="zone-label" x="${26 + i*96}" y="${H-32}">${z}</text>`;
+  });
+
+  evidence.forEach(e => {
+    if (!e.actor || !e.target || !pos[e.target]) return;
+    const [x1,y1] = pos[e.actor], [x2,y2] = pos[e.target];
+    const hot = e.actor === lead || e.target === lead;
+    const bend = (x1+x2)/2 + (y2-y1)*0.12, bendY = (y1+y2)/2 - (x2-x1)*0.12;
+    out += `<path class="chalk-line${hot ? ' hot' : ''}" d="M${x1} ${y1} Q${bend} ${bendY} ${x2} ${y2}"/>`;
+  });
+
+  people.forEach(p => {
+    const [x,y] = pos[p];
+    const short = p.split(' ').pop().slice(0,9);
+    out += `<g class="node${p === lead ? ' lead' : ''}">` +
+           `<circle cx="${x}" cy="${y}" r="22"/>` +
+           `<text x="${x}" y="${y+4}">${short}</text></g>`;
+  });
+
+  svg.innerHTML = out;
+
+  $('facts').innerHTML = evidence.map(e =>
+    `<div>${e.kind.toLowerCase().replace('_',' ')} · ${e.actor || '?'}` +
+    (e.target ? ' → ' + e.target : '') +
+    (e.zone ? ' · ' + e.zone : '') +
+    (e.pressure ? ' · pressure ' + Number(e.pressure).toFixed(2) : '') +
+    `<span class="id"> ${String(e.event_id).slice(0,8)}</span></div>`).join('');
+}
+</script>
+</body>
+</html>
