@@ -93,6 +93,26 @@ FORMATIONS: dict[str, tuple[int, int, int]] = {
     "5-3-2": (5, 3, 2),
 }
 
+#: Stadium per club: name, capacity. Invented, like everything else here.
+STADIA: list[tuple[str, int]] = [
+    ("Ashcombe Park", 32400),
+    ("The Northgate", 41800),
+    ("Weir Lane", 24600),
+    ("Brindley Fields", 28900),
+    ("The Crucible Ground", 37200),
+    ("Everdon Vale", 21500),
+    ("Kingsmere Road", 45100),
+    ("The Thicket", 26300),
+]
+
+#: Officials pool. Role is assigned per match, not stored here, because the
+#: same person referees one week and runs the line the next.
+OFFICIALS: list[str] = [
+    "Daniel Whitlock", "Priya Raman", "Tomas Weber", "Grace Mbeki",
+    "Alan Prentice", "Sofia Marchetti", "Jonah Adeyemi", "Clare Dunning",
+    "Ruben Castillo", "Ingrid Halvorsen", "Martin Oyelaran", "Beatrice Lund",
+]
+
 CLUBS: list[tuple[str, str, str]] = [
     ("Ashcombe Rovers", "ASH", "Ashcombe Park"),
     ("Northgate United", "NGU", "The Northgate"),

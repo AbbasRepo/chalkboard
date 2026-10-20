@@ -95,13 +95,56 @@ class Team:
 
 
 @dataclass(frozen=True)
+class Stadium:
+    stadium_id: str
+    name: str
+    capacity: int
+    pitch_length_m: float = PITCH_LENGTH_M
+    pitch_width_m: float = PITCH_WIDTH_M
+
+
+@dataclass(frozen=True)
+class Official:
+    """A match official. Role lives on the edge, not here.
+
+    The same person referees one week and runs the line the next, so role is
+    a fact about this appointment rather than about the person.
+    """
+
+    referee_id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class Appointment:
+    official: Official
+    role: str  # referee | assistant_1 | assistant_2 | var
+
+
+@dataclass(frozen=True)
+class Prediction:
+    """Pre-game forecast, stored so the narrative can argue with the result."""
+
+    model: str
+    win_prob_home: float
+    draw_prob: float
+    win_prob_away: float
+    expected_goals_home: float
+    expected_goals_away: float
+
+
+@dataclass(frozen=True)
 class MatchMeta:
     match_id: str
     competition: str
-    venue: str
+    season: str
+    matchweek: int
+    stadium: Stadium
     kickoff_utc: str
     home: Team
     away: Team
+    officials: tuple[Appointment, ...] = ()
+    prediction: Prediction | None = None
     period_length_s: int = 2700
     seed: int | None = None
 
@@ -156,6 +199,16 @@ class MatchEvent:
     # Pressure context (brief: pressure events)
     pressure: float | None = None
     opponents_within_5m: int | None = None
+
+    # Space. Attack-relative zone codes, so a query never has to know which
+    # way the teams are kicking. See generator/pitch.py.
+    start_zone: str | None = None
+    end_zone: str | None = None
+
+    # How long the player held the ball before releasing it. The difference
+    # between a one-touch combination and a player dwelling under pressure,
+    # which is exactly the sort of thing the narrative layer should notice.
+    hold_time_s: float | None = None
 
     # Running score after this event, so any single event is self-sufficient
     score_home: int = 0

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 import time
@@ -29,9 +30,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .models import MatchMeta
+from .models import Appointment, MatchMeta, Official, Prediction, Stadium
 from .simulator import MatchSimulator
-from .teams import FORMATIONS, STYLES, build_team, venue_for
+from .teams import FORMATIONS, OFFICIALS, STADIA, STYLES, build_team
 
 
 #: Fixed epoch for generated fixtures. Deriving kickoff from the seed rather
@@ -40,12 +41,61 @@ from .teams import FORMATIONS, STYLES, build_team, venue_for
 SEASON_START = datetime(2026, 8, 8, 15, 0, tzinfo=timezone.utc)
 
 
+ROLES = ("referee", "assistant_1", "assistant_2", "var")
+
+
+def _predict(home, away) -> Prediction:
+    """A pre-game forecast, stored so the narrative can argue with the result.
+
+    Deliberately simple and honest: team strength is the mean of the starting
+    eleven's attacking and defending weights, nudged by style. Goals are then
+    Poisson. It is not fitted to anything - it cannot be, the league does not
+    exist - but it is explainable, which matters more here than accuracy.
+    """
+    def strength(team):
+        starters = team.starters()
+        attack = sum(p.finishing + p.passing for p in starters) / (2 * len(starters))
+        defend = sum(p.defending for p in starters) / len(starters)
+        tempo = STYLES[team.style].shot_appetite
+        return attack * (0.85 + 0.3 * tempo), defend
+
+    ha, hd = strength(home)
+    aa, ad = strength(away)
+    xg_home = round(max(0.3, 1.45 * (ha / max(ad, 0.1)) ** 0.9), 2)
+    xg_away = round(max(0.3, 1.15 * (aa / max(hd, 0.1)) ** 0.9), 2)
+
+    # Poisson scoreline matrix, truncated at 8 goals a side.
+    def pois(k, lam):
+        return math.exp(-lam) * lam**k / math.factorial(k)
+
+    home_w = draw = away_w = 0.0
+    for h in range(9):
+        for a in range(9):
+            p = pois(h, xg_home) * pois(a, xg_away)
+            if h > a:
+                home_w += p
+            elif h == a:
+                draw += p
+            else:
+                away_w += p
+    total = home_w + draw + away_w
+    return Prediction(
+        model="poisson-squad-strength",
+        win_prob_home=round(home_w / total, 3),
+        draw_prob=round(draw / total, 3),
+        win_prob_away=round(away_w / total, 3),
+        expected_goals_home=xg_home,
+        expected_goals_away=xg_away,
+    )
+
+
 def build_match(
     seed: int,
     home_style: str | None = None,
     away_style: str | None = None,
     period_length_s: int = 2700,
     kickoff_utc: str | None = None,
+    matchweek: int = 1,
 ) -> MatchMeta:
     rng = random.Random(seed)
     styles = list(STYLES)
@@ -57,10 +107,30 @@ def build_match(
     home = build_team(rng, home_idx, home_style or rng.choice(styles), rng.choice(formations))
     away = build_team(rng, away_idx, away_style or rng.choice(styles), rng.choice(formations))
 
+    stadium_name, capacity = STADIA[home_idx % len(STADIA)]
+    stadium = Stadium(
+        stadium_id=f"ST-{home_idx + 1:02d}",
+        name=stadium_name,
+        capacity=capacity,
+    )
+
+    chosen = rng.sample(range(len(OFFICIALS)), 4)
+    officials = tuple(
+        Appointment(
+            official=Official(referee_id=f"REF-{i + 1:02d}", name=OFFICIALS[i]),
+            role=role,
+        )
+        for i, role in zip(chosen, ROLES)
+    )
+
     return MatchMeta(
         match_id=f"CBM-{seed:05d}",
         competition="Chalkboard Invitational",
-        venue=venue_for(home_idx),
+        season="2026/27",
+        matchweek=matchweek,
+        stadium=stadium,
+        officials=officials,
+        prediction=_predict(home, away),
         kickoff_utc=kickoff_utc
         or (SEASON_START + timedelta(days=7 * (seed % 38)))
         .isoformat()
@@ -89,7 +159,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
         out_dir = Path(args.out_dir or "data")
         total = 0
         for offset in range(args.matches):
-            meta = build_match(args.seed + offset, args.home_style, args.away_style)
+            meta = build_match(
+                args.seed + offset, args.home_style, args.away_style,
+                matchweek=offset + 1,
+            )
             written = _write_match(meta, out_dir / f"{meta.match_id}.jsonl")
             total += written
             print(

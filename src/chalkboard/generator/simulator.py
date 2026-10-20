@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from .models import EventType, MatchEvent, MatchMeta, Outcome, Player, Position, Team
+from .pitch import zone_id
 from .teams import STYLES, StyleProfile
 
 #: Mean seconds of match clock consumed by a single event, before tempo scaling.
@@ -115,6 +116,7 @@ class MatchSimulator:
 
         x, y = self._start_location(restart, press)
         carrier = self._pick_starter(attacking, x)
+        received_at = self._clock
 
         for index in range(MAX_CHAIN):
             pressure, nearby = self._pressure_at(x, press)
@@ -160,15 +162,17 @@ class MatchSimulator:
                         start_y=100.0 - y,
                         pressure=round(pressure, 3),
                         opponents_within_5m=nearby,
+                        start_zone=zone_id(100.0 - x, 100.0 - y),
                         tags=["press_trigger"],
                     )
                 )
 
             target = self._pick_receiver(attacking, carrier, x, style)
             end_x, end_y = self._destination(x, y, style, action)
+            hold = max(0.0, self._clock - received_at)
             event = self._build_move(
                 action, attacking, carrier, target, x, y, end_x, end_y,
-                pressure, nearby, possession_id, index, style,
+                pressure, nearby, possession_id, index, style, hold,
             )
             events.append(event)
 
@@ -188,12 +192,14 @@ class MatchSimulator:
                         start_y=100.0 - end_y,
                         pressure=round(pressure, 3),
                         opponents_within_5m=nearby,
+                        start_zone=zone_id(100.0 - end_x, 100.0 - end_y),
                         tags=["turnover", self._zone(end_x)],
                     )
                 )
                 return events, defending
 
             x, y, carrier = end_x, end_y, target
+            received_at = self._clock
 
         return events, defending
 
@@ -234,6 +240,7 @@ class MatchSimulator:
         possession_id: str,
         index: int,
         style: StyleProfile,
+        hold_time_s: float,
     ) -> MatchEvent:
         distance = _metres(x, y, end_x, end_y)
         angle = math.degrees(math.atan2(end_y - y, end_x - x))
@@ -265,6 +272,9 @@ class MatchSimulator:
             ball_speed_ms=round(speed, 2),
             pressure=round(pressure, 3),
             opponents_within_5m=nearby,
+            start_zone=zone_id(x, y),
+            end_zone=zone_id(end_x, end_y),
+            hold_time_s=round(hold_time_s, 2),
             tags=[self._zone(x)] + (["progressive"] if progressive else []),
         )
 
@@ -312,6 +322,7 @@ class MatchSimulator:
             body_part=body,
             pressure=round(pressure, 3),
             opponents_within_5m=nearby,
+            start_zone=zone_id(x, y),
             tags=["shot", self._zone(x)],
         )
         events = [shot]

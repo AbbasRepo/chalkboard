@@ -1,65 +1,220 @@
-# Chalkboard match ontology.
+# Chalkboard match ontology
 #
-# THE file to read first. It describes the entire data model: how a synthetic
-# match event becomes nodes and relationships in the graph.
+# THE file to read first. It is the whole semantic model: the nouns that
+# become nodes, the verbs that become relationships, and the adjectives and
+# adverbs that become properties on each.
 #
-# Hard rule: this file describes STRUCTURE only. No conditions, no loops, no
-# expressions. The moment it needs one of those, the logic belongs in
-# graph/loader.py instead. A config language that grows a brain is a
-# programming language nobody documented.
+# Two rules govern it.
+#
+# 1. ARITY DECIDES SHAPE. An action with two participants is a relationship:
+#    a pass is Player -> Player, and modelling it as a node would turn a
+#    one-hop fact into a two-hop detour. An action with more than two -
+#    a shot involves shooter, keeper, zone and sometimes an assister - has
+#    no choice but to be a node. Nothing is reified for taste.
+#
+# 2. STRUCTURE ONLY. No conditions, no loops, no expressions. The moment
+#    this file needs one, that logic belongs in graph/loader.py. A config
+#    language that grows a brain is a programming language nobody
+#    documented.
+#
+# Coordinates and zones are attack-relative: always from the perspective of
+# the team in possession. No query ever needs to know which way the teams
+# are kicking.
 
-nodes:
+# ---------------------------------------------------------------- the world
+
+entities:
+
+  Competition:
+    key: competition_id
+    properties: [name, season]
+
   Match:
     key: match_id
-    properties: [competition, venue, period, clock_s, score_home, score_away]
+    properties:
+      - matchweek
+      - kickoff_utc
+      - period_length_s
+      - score_home
+      - score_away
+      # Pre-game forecast, stored so the narrative can argue with the result.
+      - pre_game_win_prob_home
+      - pre_game_draw_prob
+      - pre_game_win_prob_away
+      - pre_game_xg_home
+      - pre_game_xg_away
+      - prediction_model
+
+  Stadium:
+    key: stadium_id
+    properties: [name, capacity, pitch_length_m, pitch_width_m]
+
   Team:
     key: team_id
-    properties: [name, formation, style]
+    properties: [name, short_name]
+    # Note: formation and style are per-match choices, so they live on the
+    # HOME_TEAM / AWAY_TEAM edge rather than here.
+
   Player:
     key: player_id
-    properties: [name, shirt_number, position]
-  Possession:
-    key: possession_id
-    properties: [team_id, start_zone, end_reason, event_count]
-  Event:
+    properties: [name]
+    # Shirt number and position are facts about a player in a match, not
+    # about the player. They live on PLAYED_IN.
+
+  Referee:
+    key: referee_id
+    properties: [name]
+    # Role is per appointment - the same official referees one week and runs
+    # the line the next - so it lives on OFFICIATED_BY.
+
+  Zone:
+    key: zone_id
+    properties: [band, channel, name, half_space]
+    # 18 zones: six bands by three channels. Space is modelled as nodes so
+    # actions can point into it, and so "the attack shifted channels" is a
+    # traversal rather than arithmetic on coordinates.
+
+# ------------------------------------------------- actions with >2 participants
+
+reified:
+
+  Shot:
     key: event_id
-    properties:
-      - type
-      - outcome
-      - clock_s
-      - start_x
-      - start_y
-      - end_x
-      - end_y
-      - shot_xg
-      - pressure
-      - pass_difficulty
-      - pass_distance_m
-      - pass_progressive
-      - ball_speed_ms
-      - shot_speed_ms
+    source_type: SHOT
+    properties: [clock_s, period, match_id, possession_id, shot_xg,
+                 shot_speed_ms, body_part, outcome, pressure]
 
-# Structural edges: written once per event, never revisited.
-edges:
-  - type: PART_OF
-    from: {node: Possession, key: possession_id}
-    to:   {node: Match,      key: match_id}
-  - type: HOLDS
-    from: {node: Possession, key: possession_id}
-    to:   {node: Event,      key: event_id}
-  - type: ACTED_IN
-    from: {node: Player, key: player_id}
-    to:   {node: Event,  key: event_id}
-    properties: [outcome]
-  - type: BELONGS_TO
-    from: {node: Player, key: player_id}
-    to:   {node: Team,   key: team_id}
+  Foul:
+    key: event_id
+    source_type: FOUL
+    properties: [clock_s, period, match_id, card, pressure]
 
-# Derived edges are NOT built here. They are recomputed on a timer by
-# derived.cypher, because they aggregate over a window rather than mapping
-# one event. Listed for documentation only.
+  Insight:
+    key: insight_id
+    # Not part of the football domain. This is the system's own record of
+    # what it said, kept so every sentence can be walked back to the facts
+    # behind it.
+    properties: [clock_s, match_id, score, sentence, persona, language]
+
+# ------------------------------------------------------------ the skeleton
+
+structure:
+
+  - type: IN_COMPETITION
+    from: {node: Match, key: match_id}
+    to:   {node: Competition, key: competition_id}
+
+  - type: PLAYED_AT
+    from: {node: Match, key: match_id}
+    to:   {node: Stadium, key: stadium_id}
+
+  - type: OFFICIATED_BY
+    from: {node: Match, key: match_id}
+    to:   {node: Referee, key: referee_id}
+    properties: [role]
+
+  - type: HOME_TEAM
+    from: {node: Match, key: match_id}
+    to:   {node: Team, key: team_id}
+    properties: [formation, style]
+
+  - type: AWAY_TEAM
+    from: {node: Match, key: match_id}
+    to:   {node: Team, key: team_id}
+    properties: [formation, style]
+
+  - type: PLAYS_FOR
+    from: {node: Player, key: player_id}
+    to:   {node: Team, key: team_id}
+
+  - type: PLAYED_IN
+    from: {node: Player, key: player_id}
+    to:   {node: Match, key: match_id}
+    properties: [shirt_number, position, starter, minutes]
+
+  - type: ADJACENT_TO
+    from: {node: Zone, key: zone_id}
+    to:   {node: Zone, key: zone_id}
+    # Static pitch topology, loaded once per graph.
+
+# --------------------------------------------------------------- the actions
+#
+# Every action edge carries the temporal spine: clock_s, period, match_id,
+# possession_id, sequence, outcome. match_id matters because the graph holds
+# several matches and Zone nodes are shared across all of them - without it,
+# "where does this side press" silently mixes fixtures.
+
+actions:
+
+  - type: PASSED_TO
+    source_type: [PASS, CROSS]
+    from: {node: Player, key: player_id}
+    to:   {node: Player, key: related_player_id}
+    properties: [pass_distance_m, pass_angle_deg, pass_progressive,
+                 pass_difficulty, ball_speed_ms, pressure, hold_time_s,
+                 start_zone, end_zone]
+
+  - type: CARRIED_INTO
+    source_type: [CARRY]
+    from: {node: Player, key: player_id}
+    to:   {node: Zone, key: end_zone}
+    properties: [pass_distance_m, pressure, hold_time_s, start_zone]
+
+  - type: DISPOSSESSED
+    source_type: [TACKLE, INTERCEPTION]
+    from: {node: Player, key: player_id}
+    to:   {node: Zone, key: start_zone}
+    properties: [pressure, opponents_within_5m]
+
+  - type: PRESSED_IN
+    source_type: [PRESSURE]
+    from: {node: Player, key: player_id}
+    to:   {node: Zone, key: start_zone}
+    properties: [pressure, opponents_within_5m]
+
+  - type: TOOK
+    source_type: [SHOT]
+    from: {node: Player, key: player_id}
+    to:   {node: Shot, key: event_id}
+
+  - type: FROM_ZONE
+    source_type: [SHOT]
+    from: {node: Shot, key: event_id}
+    to:   {node: Zone, key: start_zone}
+
+  - type: SAVED_BY
+    source_type: [SAVE]
+    from: {node: Shot, key: event_id}
+    to:   {node: Player, key: player_id}
+
+# ------------------------------------------------------- provenance of output
+
+provenance:
+
+  - type: EVIDENCED_BY
+    from: {node: Insight, key: insight_id}
+    to:   {node: Shot, key: event_id}
+
+  - type: ABOUT_PLAYER
+    from: {node: Insight, key: insight_id}
+    to:   {node: Player, key: player_id}
+
+  - type: ABOUT_ZONE
+    from: {node: Insight, key: insight_id}
+    to:   {node: Zone, key: zone_id}
+
+  - type: IN_MATCH
+    from: {node: Insight, key: insight_id}
+    to:   {node: Match, key: match_id}
+
+# ------------------------------------------------------------------ derived
+#
+# Recomputed on a timer by derived.cypher, never written by the loader.
+# These are the clean aggregate edges the UI draws: the raw action edges
+# underneath are what make their weights true and what an insight cites.
+
 derived:
-  - PASSES_TO       # Player -> Player   count, progressive, mean difficulty
-  - PRESSED_INTO    # Team   -> Zone     turnovers forced, mean pressure
-  - NEMESIS_OF      # Player -> Player   duels, win rate
-  - LINKS_WITH      # Player -> Player   shared possessions, mean progression
+  - type: LINKS_WITH        # Player -> Player   passes, progression, difficulty
+  - type: CIRCULATES_THROUGH # Team  -> Player   received share, centrality
+  - type: PRESSES_IN        # Team   -> Zone     turnovers forced, intensity
+  - type: NEMESIS_OF        # Player -> Player   duels, win rate
