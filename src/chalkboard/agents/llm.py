@@ -107,11 +107,18 @@ class CopilotCLIClient:
         self,
         command: str = "copilot",
         timeout_s: float = DEFAULT_TIMEOUT_S,
-        args_template: str = "-p|{prompt}",
+        args_template: str = "-p|{prompt}|--allow-all-tools",
+        use_stdin: bool = False,
     ) -> None:
         self.command = command
         self.timeout_s = timeout_s
         self.args_template = args_template
+        #: Pipe the prompt rather than passing it as an argument. On Windows
+        #: the CLI is a .cmd shim, so the command line goes through cmd.exe,
+        #: which mangles embedded newlines - the CLI then receives a
+        #: truncated prompt and replies that it was given no details. Piping
+        #: sidesteps the shell entirely.
+        self.use_stdin = use_stdin
 
     def available(self) -> bool:
         return shutil.which(self.command) is not None
@@ -122,14 +129,37 @@ class CopilotCLIClient:
             return None
 
         full = f"{system}\n\n{prompt}" if system else prompt
-        argv = [self.command] + [
-            part.replace("{prompt}", full)
-            for part in self.args_template.split("|")
-        ]
+
+        if self.use_stdin:
+            # Drop the placeholder AND the flag that introduces it. Leaving
+            # "-p" behind with nothing after it makes the CLI exit with
+            # "a value is required for --prompt", which is a confusing way
+            # to discover the prompt went down the pipe instead.
+            parts = self.args_template.split("|")
+            argv = [self.command]
+            skip_next = False
+            for index, part in enumerate(parts):
+                if "{prompt}" in part:
+                    continue
+                nxt = parts[index + 1] if index + 1 < len(parts) else ""
+                if part in ("-p", "--prompt", "-i", "--interactive") and "{prompt}" in nxt:
+                    continue
+                argv.append(part)
+            stdin_text = full
+        else:
+            # Newlines in an argv element do not survive cmd.exe. Flatten to
+            # a single line so the whole prompt arrives intact.
+            flat = " ".join(line.strip() for line in full.splitlines() if line.strip())
+            argv = [self.command] + [
+                part.replace("{prompt}", flat)
+                for part in self.args_template.split("|")
+            ]
+            stdin_text = None
 
         try:
             result = subprocess.run(
                 argv,
+                input=stdin_text,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_s,
@@ -178,7 +208,9 @@ def get_client(fallback: str | None = None) -> ModelClient:
     client = CopilotCLIClient(
         command=(os.environ.get("COPILOT_CMD") or "copilot").strip(),
         timeout_s=float(os.environ.get("COPILOT_TIMEOUT_S") or DEFAULT_TIMEOUT_S),
-        args_template=(os.environ.get("COPILOT_ARGS") or "-p|{prompt}").strip(),
+        args_template=(os.environ.get("COPILOT_ARGS") or "-p|{prompt}|--allow-all-tools").strip(),
+        use_stdin=(os.environ.get("COPILOT_STDIN") or "").strip().lower()
+        in ("1", "true", "yes"),
     )
     if not client.available():
         log.warning("copilot CLI not on PATH - falling back to the stub")

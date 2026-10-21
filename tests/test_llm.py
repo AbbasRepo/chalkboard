@@ -100,3 +100,43 @@ def test_invocation_is_configurable(monkeypatch):
 
     assert client.complete("why did that matter?") == "answer"
     assert seen["argv"] == ["copilot", "--ask", "why did that matter?"]
+
+
+def test_stdin_mode_drops_the_prompt_flag_as_well(monkeypatch):
+    """Leaving "-p" behind with nothing after it makes the CLI exit with
+    "a value is required for --prompt" - a confusing way to discover the
+    prompt went down the pipe instead."""
+    seen = {}
+
+    def capture(argv, **kwargs):
+        seen["argv"] = argv
+        seen["stdin"] = kwargs.get("input")
+        return subprocess.CompletedProcess(argv, 0, "answer", "")
+
+    client = CopilotCLIClient(
+        args_template="-p|{prompt}|--allow-all-tools", use_stdin=True
+    )
+    monkeypatch.setattr(client, "available", lambda: True)
+    monkeypatch.setattr(subprocess, "run", capture)
+
+    assert client.complete("why did that matter?") == "answer"
+    assert seen["argv"] == ["copilot", "--allow-all-tools"]
+    assert "why did that matter?" in seen["stdin"]
+
+
+def test_argument_mode_flattens_newlines(monkeypatch):
+    """Newlines in an argv element do not survive cmd.exe on Windows, and
+    the CLI then receives a truncated prompt."""
+    seen = {}
+
+    def capture(argv, **kwargs):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, "answer", "")
+
+    client = CopilotCLIClient(args_template="-p|{prompt}")
+    monkeypatch.setattr(client, "available", lambda: True)
+    monkeypatch.setattr(subprocess, "run", capture)
+
+    client.complete("line one\nline two\n\nline three")
+    assert "\n" not in seen["argv"][2]
+    assert "line one line two line three" in seen["argv"][2]

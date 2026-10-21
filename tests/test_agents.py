@@ -165,3 +165,43 @@ def test_language_reaches_the_prompt(insight):
     client = ScriptedClient("Weber la recuperó dos veces.")
     Personaliser(client, "Tomas Weber", language="Spanish").render(insight)
     assert any("Spanish" in p for p in client.prompts)
+
+
+def test_rejects_a_refusal(moment):
+    """A model handed a mangled prompt replies asking for the details it was
+    already given. Such a reply invents no names and no numbers, so the other
+    checks pass it happily - and it would then be stored as an insight.
+    """
+    explainer = Explainer(ScriptedClient(
+        "I can't explain why the moment mattered without details of the event."
+    ))
+    insight = explainer.explain(moment)
+    assert insight.source == "graph"
+    assert "refusal" in insight.rejected
+
+
+def test_rejects_a_sentence_naming_nobody_from_the_evidence(moment):
+    """An explanation of a moment must name someone who was in it."""
+    explainer = Explainer(ScriptedClient("A fine passage of play in midfield."))
+    assert explainer.explain(moment).source == "graph"
+
+
+def test_still_accepts_a_proper_explanation(moment):
+    explainer = Explainer(ScriptedClient("Weber won it back twice under pressure."))
+    assert explainer.explain(moment).source == "model"
+
+
+def test_a_capitalised_opening_word_is_not_treated_as_a_name(moment):
+    """"Two early shots..." is a well-formed sentence, not a player called
+    Two. Rejecting it would fire on most decent prose."""
+    explainer = Explainer(ScriptedClient(
+        "Two turnovers put Weber in control of that zone."
+    ))
+    assert explainer.explain(moment).source == "model"
+
+
+def test_a_name_mid_sentence_is_still_caught(moment):
+    explainer = Explainer(ScriptedClient("Weber won it, then Marchetti cleared."))
+    insight = explainer.explain(moment)
+    assert insight.source == "graph"
+    assert "Marchetti" in insight.rejected

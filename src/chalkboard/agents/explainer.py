@@ -249,7 +249,28 @@ class Explainer:
         haystack = _fact_text(facts)
         allowed_names = {n for name in facts["names"] for n in name.split()}
 
-        for token in re.findall(r"\b[A-Z][a-z]{2,}\b", sentence):
+        # A model that was handed a mangled prompt replies asking for the
+        # details it was already given. Those refusals contain no invented
+        # names or numbers, so the checks below pass them happily - and a
+        # refusal would then be stored as an insight. An explanation of a
+        # moment must name someone who was in it.
+        # Refusal first: it is the more precise diagnosis, and a refusal
+        # also happens to name nobody, so checking the other way round would
+        # report the vaguer reason.
+        for tell in ("i can't", "i cannot", "i can’t", "provide the", "without details"):
+            if tell in sentence.lower():
+                return False, "is a refusal rather than an explanation"
+        if facts["names"] and not any(
+            name.split()[-1] in sentence for name in facts["names"]
+        ):
+            return False, "names nobody from the evidence"
+
+        # Only mid-sentence capitals can be names. A capitalised word that
+        # opens a sentence is just a capitalised word - "Two early shots"
+        # was being rejected as an unknown player, which is a false positive
+        # that would fire on most well-formed sentences.
+        for match in re.finditer(r"(?<![.!?]\s)(?<!^)\b[A-Z][a-z]{2,}\b", sentence):
+            token = match.group()
             if token in _SAFE_WORDS or token in allowed_names:
                 continue
             if token in haystack:
