@@ -180,10 +180,14 @@ class Personaliser:
 
         allowed = {w for name in insight.about_players for w in name.split()}
         source_words = set(re.findall(r"\b[A-Z][a-z]{2,}\b", insight.sentence))
-        for token in re.findall(r"\b[A-Z][a-z]{2,}\b", candidate):
+
+        # Only mid-sentence capitals can be names. English capitalises the
+        # first word of every sentence, so treating those as names rejects
+        # most well-formed rewrites - and both panes then show the same
+        # text, which hides exactly the personalisation this is for.
+        for match in re.finditer(r"(?<![.!?]\s)(?<!^)\b[A-Z][a-z]{2,}\b", candidate):
+            token = match.group()
             if token in allowed or token in source_words:
-                continue
-            if token in {"Your", "The", "That", "This", "He", "His", "Nothing"}:
                 continue
             return False
         return True

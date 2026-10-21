@@ -42,11 +42,12 @@ from .llm import ModelClient, StubClient
 
 log = logging.getLogger(__name__)
 
+#: Short on purpose. Every token here is read before a word is written, and
+#: the CLI is slow enough that prompt length is felt directly.
 SYSTEM = (
-    "You are a football analyst writing one sentence of live commentary. "
-    "Explain WHY the moment mattered, not that it happened. "
-    "Use only the names and numbers given to you. Invent nothing. "
-    "No preamble, no quotation marks, one sentence, under 30 words."
+    "Football commentary. One sentence, under 25 words, saying WHY this "
+    "mattered. Use only the given names and numbers. Invent nothing. "
+    "No preamble."
 )
 
 #: Words that look like names but are ours, not the model's inventions.
@@ -260,10 +261,13 @@ class Explainer:
         for tell in ("i can't", "i cannot", "i can’t", "provide the", "without details"):
             if tell in sentence.lower():
                 return False, "is a refusal rather than an explanation"
-        if facts["names"] and not any(
-            name.split()[-1] in sentence for name in facts["names"]
-        ):
-            return False, "names nobody from the evidence"
+        # The sentence must be anchored to something concrete that was
+        # supplied - a player or a zone. Requiring a player name alone was
+        # too narrow: "two line-breaking passes carried play into Z5C" is
+        # perfectly traceable, it is simply about space rather than people.
+        anchors = [name.split()[-1] for name in facts["names"]] + list(facts["zones"])
+        if anchors and not any(anchor in sentence for anchor in anchors):
+            return False, "is anchored to nothing in the evidence"
 
         # Only mid-sentence capitals can be names. A capitalised word that
         # opens a sentence is just a capitalised word - "Two early shots"

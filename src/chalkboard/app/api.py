@@ -62,7 +62,40 @@ def driver():
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+    # No caching. During a build the page changes often, and a stale copy
+    # presents as an empty or broken UI while the API is plainly healthy -
+    # which sends you looking in the wrong place entirely.
+    return FileResponse(
+        STATIC / "index.html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
+@app.get("/api/squad")
+def squad(match: str) -> list[dict[str, Any]]:
+    """Both squads for one match, starters flagged.
+
+    A viewer chooses who to follow before kick-off rather than after, so
+    this is fetched when a match is picked rather than when the stream
+    starts.
+
+    Note the simulator does not make substitutions, so the starting eleven
+    plays the full ninety. Substitutes are returned and shown, but marked
+    unavailable - it would be worse to list them asselectable and have them
+    never touch the ball.
+    """
+    with driver().session() as session:
+        rows = session.run(
+            "MATCH (p:Player)-[a:PLAYED_IN]->(:Match {match_id: $matchId}) "
+            "MATCH (p)-[:PLAYS_FOR]->(t:Team) "
+            "RETURN p.player_id AS player_id, p.name AS name, "
+            "       a.position AS position, a.shirt_number AS shirt, "
+            "       coalesce(a.starter, false) AS starter, "
+            "       t.short_name AS team, t.name AS team_name "
+            "ORDER BY t.short_name, a.starter DESC, a.shirt_number",
+            matchId=match,
+        )
+        return [dict(r) for r in rows]
 
 
 @app.get("/api/matches")

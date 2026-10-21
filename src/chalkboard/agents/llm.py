@@ -51,6 +51,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 from typing import Protocol
 
 log = logging.getLogger(__name__)
@@ -109,10 +110,19 @@ class CopilotCLIClient:
         timeout_s: float = DEFAULT_TIMEOUT_S,
         args_template: str = "-p|{prompt}|--allow-all-tools",
         use_stdin: bool = False,
+        isolated: bool = True,
     ) -> None:
         self.command = command
         self.timeout_s = timeout_s
         self.args_template = args_template
+        #: Run from an empty directory rather than the project.
+        #:
+        #: The CLI is a coding agent: started inside a repository it reads
+        #: files, inspects the project and plans before answering. For a
+        #: one-sentence rewrite that work is pure latency. An empty working
+        #: directory gives it nothing to explore.
+        self.isolated = isolated
+        self._scratch: str | None = None
         #: Pipe the prompt rather than passing it as an argument. On Windows
         #: the CLI is a .cmd shim, so the command line goes through cmd.exe,
         #: which mangles embedded newlines - the CLI then receives a
@@ -166,6 +176,7 @@ class CopilotCLIClient:
                 check=False,
                 encoding="utf-8",
                 errors="replace",
+                cwd=self._workdir(),
             )
         except subprocess.TimeoutExpired:
             log.warning("copilot timed out after %.0fs", self.timeout_s)
@@ -179,6 +190,14 @@ class CopilotCLIClient:
             return None
 
         return _clean(result.stdout)
+
+
+    def _workdir(self) -> str | None:
+        if not self.isolated:
+            return None
+        if self._scratch is None:
+            self._scratch = tempfile.mkdtemp(prefix="chalkboard-llm-")
+        return self._scratch
 
 
 def _clean(raw: str) -> str | None:
@@ -211,6 +230,8 @@ def get_client(fallback: str | None = None) -> ModelClient:
         args_template=(os.environ.get("COPILOT_ARGS") or "-p|{prompt}|--allow-all-tools").strip(),
         use_stdin=(os.environ.get("COPILOT_STDIN") or "").strip().lower()
         in ("1", "true", "yes"),
+        isolated=(os.environ.get("COPILOT_ISOLATED") or "true").strip().lower()
+        not in ("0", "false", "no"),
     )
     if not client.available():
         log.warning("copilot CLI not on PATH - falling back to the stub")

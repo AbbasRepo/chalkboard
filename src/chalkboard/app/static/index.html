@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chalkboard</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
@@ -31,7 +32,7 @@ body{
 
 /* ---------- scoreboard ---------- */
 header{
-  display:flex;align-items:baseline;gap:1.5rem;
+  display:flex;align-items:center;gap:1.1rem;
   padding:.9rem 1.5rem;border-bottom:1px solid var(--rule);
   background:var(--slate-up);flex-wrap:wrap;
 }
@@ -45,6 +46,8 @@ header{
 
 /* ---------- controls ---------- */
 .controls{display:flex;gap:.6rem;align-items:center;padding:.6rem 1.5rem;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+optgroup{color:var(--chalk-dim);font-style:normal;font-weight:600}
+option:disabled{color:var(--chalk-faint)}
 select,button{
   font:inherit;font-size:.9rem;color:var(--chalk);
   background:var(--slate-up);border:1px solid var(--rule);
@@ -97,6 +100,7 @@ svg{width:100%;flex:1;min-height:260px}
 <body>
 
 <header>
+  <img src="/static/logo.svg" alt="" width="34" height="34" style="border-radius:4px">
   <div class="wordmark">Chalkboard <span>— the tactics board that answers back</span></div>
   <div class="score num"><b id="home">—</b> <span id="sh">0</span><em>:</em><span id="sa">0</span> <b id="away">—</b></div>
   <div class="clock num" id="clock">0'</div>
@@ -106,7 +110,7 @@ svg{width:100%;flex:1;min-height:260px}
 
 <div class="controls">
   <select id="match"></select>
-  <select id="follow"><option value="">Following: nobody yet</option></select>
+  <select id="follow"><option value="">Following: nobody</option></select>
   <select id="language">
     <option value="en">English</option>
     <option value="Spanish">Spanish</option>
@@ -150,8 +154,47 @@ let source = null, squad = [], teams = {};
 // ---------------------------------------------------------------- setup
 fetch('/api/matches').then(r => r.json()).then(list => {
   $('match').innerHTML = list.map(m =>
-    `<option value="${m.match_id}">MW${m.matchweek} · ${m.home} v ${m.away}</option>`).join('');
+    `<option value="${m.match_id}">MW${m.matchweek ?? '?'} · ${m.home} v ${m.away}</option>`).join('');
+  loadSquad();
 }).catch(() => $('state').textContent = 'Graph unreachable');
+
+// The squad is loaded when a match is picked, not when the stream starts,
+// so a viewer can choose who to follow before kick-off rather than after.
+function loadSquad(){
+  const match = $('match').value;
+  if (!match) return;
+  fetch('/api/squad?match=' + encodeURIComponent(match))
+    .then(r => r.json())
+    .then(list => {
+      squad = list;
+      const teamsIn = [...new Set(list.map(p => p.team))];
+      let html = '<option value="">Following: nobody</option>';
+
+      // Grouped by team, and within a team the eleven on the pitch first.
+      // Substitutes are listed but disabled: the simulator makes no
+      // substitutions, so a bench player would never touch the ball and
+      // the pane would stay silent for ninety minutes.
+      for (const team of teamsIn){
+        const squadFor = list.filter(p => p.team === team);
+        const on  = squadFor.filter(p => p.starter);
+        const off = squadFor.filter(p => !p.starter);
+        if (on.length){
+          html += `<optgroup label="${team} · on the pitch">` +
+            on.map(p => `<option value="${p.player_id}" data-name="${p.name}">${p.shirt} ${p.name} (${p.position})</option>`).join('') +
+            '</optgroup>';
+        }
+        if (off.length){
+          html += `<optgroup label="${team} · substitutes, unused">` +
+            off.map(p => `<option disabled>${p.shirt} ${p.name} (${p.position})</option>`).join('') +
+            '</optgroup>';
+        }
+      }
+      $('follow').innerHTML = html;
+      $('fan-who').textContent = 'following nobody';
+    })
+    .catch(() => {});
+}
+$('match').onchange = loadSquad;
 
 fetch('/api/model').then(r => r.json()).then(setModelButton);
 
@@ -184,7 +227,9 @@ $('start').onclick = () => {
   if (follow) q.set('follow', follow);
 
   source = new EventSource('/api/stream?' + q);
-  $('state').textContent = 'Live';
+  $('state').textContent = $('model').dataset.enabled === 'true'
+    ? 'Live — model on, the clock pauses while each sentence is written'
+    : 'Live';
   source.onmessage = e => handle(JSON.parse(e.data));
   source.onerror = () => { $('state').textContent = 'Stream ended'; source.close(); };
 };
@@ -207,10 +252,9 @@ function header(m){
     $('forecast').textContent =
       `Before kick-off: ${m.home} ${Math.round(m.p_home*100)}% · draw ${Math.round(m.p_draw*100)}% · ${m.away} ${Math.round(m.p_away*100)}%`;
 
-  squad = m.squad || [];
-  teams = {}; squad.forEach(p => teams[p.name] = p.team);
-  $('follow').innerHTML = '<option value="">Following: nobody</option>' +
-    squad.map(p => `<option value="${p.player_id}" data-name="${p.name}">${p.team} ${p.shirt} ${p.name}</option>`).join('');
+  // The follow list is already populated from /api/squad, so nothing is
+  // rebuilt here - rebuilding would wipe the choice that started the stream.
+  teams = {}; (m.squad || []).forEach(p => teams[p.name] = p.team);
 }
 
 function clock(m){

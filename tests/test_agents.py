@@ -205,3 +205,37 @@ def test_a_name_mid_sentence_is_still_caught(moment):
     insight = explainer.explain(moment)
     assert insight.source == "graph"
     assert "Marchetti" in insight.rejected
+
+
+def test_a_rewrite_opening_with_a_capital_is_not_rejected(insight):
+    """English capitalises the first word of every sentence. Treating those
+    as names rejects most well-formed rewrites, and both panes then show
+    identical text - hiding the personalisation entirely.
+    """
+    p = Personaliser(ScriptedClient("Your man won it back twice in two minutes."))
+    analyst = p.render(insight).by_persona("analyst")
+    assert analyst.source == "model"
+    assert analyst.text.startswith("Your man")
+
+
+def test_a_rewrite_still_cannot_smuggle_a_name_in(insight):
+    p = Personaliser(ScriptedClient("Weber won it, then Lindqvist cleared."))
+    analyst = p.render(insight).by_persona("analyst")
+    assert analyst.source == "graph"
+    assert "Lindqvist" not in analyst.text
+
+
+def test_a_sentence_anchored_to_a_zone_is_accepted(moment):
+    """Some moments are about space rather than people. "Two line-breaking
+    passes carried play into Z4L" is traceable without naming anyone."""
+    explainer = Explainer(ScriptedClient(
+        "Two line-breaking passes carried play into Z4L."
+    ))
+    assert explainer.explain(moment).source == "model"
+
+
+def test_a_sentence_anchored_to_nothing_is_rejected(moment):
+    explainer = Explainer(ScriptedClient("It was an important passage of play."))
+    insight = explainer.explain(moment)
+    assert insight.source == "graph"
+    assert "anchored to nothing" in insight.rejected
