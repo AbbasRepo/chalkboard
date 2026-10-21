@@ -33,7 +33,7 @@ from ..agents.llm import get_client
 from ..agents.personaliser import Personaliser
 from ..graph.insights import InsightStore
 from ..graph.significance import SignificanceGate
-from ..mcp.tools import GraphTools
+from ..mcp.client import connect_tools
 from .pipeline import MatchRunner
 
 log = logging.getLogger(__name__)
@@ -44,6 +44,12 @@ app = FastAPI(title="Chalkboard", description="The tactics board that answers ba
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 _driver = None
+_transport_used = "unknown"
+
+
+def _transport() -> str:
+    """How the Explainer reached the graph on the last stream - mcp or direct."""
+    return _transport_used
 
 
 def driver():
@@ -125,12 +131,20 @@ def stream(
     def events() -> Iterator[str]:
         session = driver().session()
         try:
+            # The agent's graph access goes over MCP when the server can be
+            # started, and falls back to in-process tools when it cannot.
+            # Everything else in this file talks to Neo4j directly, because
+            # nothing else here is an agent.
+            global _transport_used
+            tools, _transport_used = connect_tools(session)
+            log.info("explainer graph access: %s", _transport_used)
+
             runner = MatchRunner(
                 session=session,
                 match_id=match,
                 gate=SignificanceGate(session),
                 explainer=Explainer(
-                    get_client(), GraphTools(session), store=InsightStore(session)
+                    get_client(), tools, store=InsightStore(session)
                 ),
                 personaliser=Personaliser(get_client(), follow, language),
                 speed=speed,
@@ -170,6 +184,6 @@ def health() -> dict[str, Any]:
     try:
         with driver().session() as session:
             nodes = session.run("MATCH (n) RETURN count(n) AS n").single()["n"]
-        return {"graph": "up", "nodes": nodes, **model_state()}
+        return {"graph": "up", "nodes": nodes, "agent_tools": _transport(), **model_state()}
     except Exception as error:  # noqa: BLE001
         return {"graph": "down", "error": str(error), **model_state()}

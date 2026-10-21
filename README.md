@@ -30,7 +30,8 @@ Azure deployment is specified in `infra/main.bicep`. It is validated but
 
 ---
 
-**Setting this up for the first time?** See [BOOTSTRAP.md](BOOTSTRAP.md).
+**New to the project?** Read [docs/RUNBOOK.md](docs/RUNBOOK.md) — setup,
+architecture, a worked example, the decisions log and troubleshooting.
 
 ---
 

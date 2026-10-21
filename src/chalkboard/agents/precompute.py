@@ -30,7 +30,7 @@ import time
 
 from ..graph.insights import InsightStore
 from ..graph.significance import SignificanceGate
-from ..mcp.tools import GraphTools
+from ..mcp.client import connect_tools
 from .explainer import Explainer
 from .llm import get_client
 from .personaliser import Personaliser  # noqa: F401 - imported for parity
@@ -76,7 +76,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with driver.session() as session:
             store = InsightStore(session)
-            explainer = Explainer(get_client(), GraphTools(session), store=store)
+            tools, transport = connect_tools(session)
+            print(f"explainer graph access: {transport}", file=sys.stderr)
+            explainer = Explainer(get_client(), tools, store=store)
             gate = SignificanceGate(session, threshold=args.threshold)
 
             print(f"sweeping {args.match} - each sentence costs a model call",
