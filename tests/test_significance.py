@@ -14,11 +14,17 @@ import pytest
 
 from chalkboard.graph.significance import (
     COOLDOWN_S,
+    DEFAULT_THRESHOLD,
     MAX_EVIDENCE,
+    THRESHOLD_MULTIPLIER,
     WINDOW_S,
     Moment,
     SignificanceGate,
+    ThresholdStats,
+    estimate_threshold,
+    load_queries,
     load_query,
+    load_threshold_query,
 )
 
 
@@ -41,15 +47,37 @@ class FakeSession:
     def __init__(self, rows=None) -> None:
         self.rows = rows if rows is not None else []
         self.calls: list[dict] = []
+        self.queries: list[str] = []
 
     def run(self, query: str, **params):
+        self.queries.append(query)
         self.calls.append(params)
         return list(self.rows)
+
+
+class RoutingFakeSession:
+    """Returns different rows for ESTIMATE_THRESHOLD vs SCORE_WINDOW queries."""
+
+    def __init__(self, threshold_rows=None, score_rows=None) -> None:
+        self.threshold_rows = threshold_rows if threshold_rows is not None else []
+        self.score_rows = score_rows if score_rows is not None else []
+        self.calls: list[tuple[str, dict]] = []
+
+    def run(self, query: str, **params):
+        self.calls.append((query, params))
+        if "expected_window_score" in query or "defaultThreshold" in params:
+            return list(self.threshold_rows)
+        return list(self.score_rows)
 
 
 @pytest.fixture
 def query():
     return load_query()
+
+
+@pytest.fixture
+def threshold_query():
+    return load_threshold_query()
 
 
 # ----------------------------------------------------------------- the query
@@ -73,6 +101,113 @@ def test_query_returns_evidence_with_citable_ids(query):
     evidence, provenance is a claim rather than a link."""
     assert "event_id: r.event_id" in query
     assert "RETURN score" in query and "evidence" in query
+
+
+# ------------------------------------------------ dynamic threshold query
+
+def test_both_named_queries_are_loaded_cleanly():
+    queries = load_queries()
+    assert set(queries) == {"ESTIMATE_THRESHOLD", "SCORE_WINDOW"}
+    for name, body in queries.items():
+        assert not body.endswith(";"), f"{name} kept its terminator"
+        assert "--name:" not in body, f"{name} swallowed the next marker"
+
+
+def test_threshold_query_aggregates_global_event_rates(threshold_query):
+    """The dynamic threshold query must inspect all scored event types
+    globally across matches without scoping to a single $matchId."""
+    assert "MATCH (m:Match)" in threshold_query
+    assert "$matchId" not in threshold_query
+    for fragment in ("DISPOSSESSED", "PASSED_TO", "Shot", "shot_xg"):
+        assert fragment in threshold_query, fragment
+    for param in ("$window", "$multiplier", "$defaultThreshold"):
+        assert param in threshold_query, param
+
+
+def test_threshold_query_is_read_only(threshold_query):
+    """Statistical parameter extraction must never mutate the graph."""
+    for keyword in ("MERGE", "CREATE", "DELETE", "SET"):
+        assert keyword not in threshold_query, keyword
+
+
+def test_estimate_threshold_extracts_stats_from_graph():
+    session = FakeSession(rows=[{
+        "threshold": 1.42,
+        "expected_window_score": 0.947,
+        "matches": 3,
+        "action_count": 3890,
+        "forced_turnovers": 42,
+        "breaking_passes": 28,
+        "shot_count": 81,
+        "total_xg": 8.6,
+    }])
+    stats = estimate_threshold(session, window_s=90.0, multiplier=1.5)
+    assert isinstance(stats, ThresholdStats)
+    assert stats.threshold == 1.42
+    assert stats.expected_window_score == 0.947
+    assert stats.matches == 3
+    assert stats.action_count == 3890
+    assert stats.forced_turnovers == 42
+    assert stats.breaking_passes == 28
+    assert stats.shot_count == 81
+    assert stats.total_xg == 8.6
+    assert session.calls[0] == {
+        "window": 90.0,
+        "multiplier": 1.5,
+        "defaultThreshold": DEFAULT_THRESHOLD,
+    }
+
+
+def test_estimate_threshold_falls_back_when_graph_is_empty():
+    session = FakeSession(rows=[])
+    stats = estimate_threshold(session)
+    assert stats.threshold == DEFAULT_THRESHOLD
+    assert stats.matches == 0
+
+
+def test_gate_derives_threshold_dynamically_on_init(monkeypatch):
+    monkeypatch.delenv("SIGNIFICANCE_THRESHOLD", raising=False)
+    monkeypatch.delenv("SIGNIFICANCE_MULTIPLIER", raising=False)
+    session = RoutingFakeSession(
+        threshold_rows=[{
+            "threshold": 1.35,
+            "expected_window_score": 0.9,
+            "matches": 2,
+            "action_count": 2600,
+            "forced_turnovers": 25,
+            "breaking_passes": 18,
+            "shot_count": 50,
+            "total_xg": 5.2,
+        }],
+        score_rows=[{"score": 1.9, "evidence": [action("e1", chance=0.9)], "window_size": 35}],
+    )
+    gate = SignificanceGate(session)
+    assert gate.threshold == 1.35
+    assert gate.threshold_stats is not None
+    assert gate.threshold_stats.matches == 2
+
+    moment = gate.check("CBM-00042", 1200.0)
+    assert moment is not None
+    assert session.calls[-1][1]["threshold"] == 1.35
+
+
+def test_gate_respects_numeric_env_override_without_querying(monkeypatch):
+    monkeypatch.setenv("SIGNIFICANCE_THRESHOLD", "2.1")
+    session = RoutingFakeSession(threshold_rows=[{"threshold": 0.9}])
+    gate = SignificanceGate(session)
+    assert gate.threshold == 2.1
+    assert gate.threshold_stats is None
+    assert len(session.calls) == 0
+
+
+def test_gate_runs_dynamic_query_when_env_is_auto(monkeypatch):
+    monkeypatch.setenv("SIGNIFICANCE_THRESHOLD", "auto")
+    monkeypatch.setenv("SIGNIFICANCE_MULTIPLIER", "1.75")
+    session = RoutingFakeSession(threshold_rows=[{"threshold": 1.65, "matches": 1}])
+    gate = SignificanceGate(session)
+    assert gate.threshold == 1.65
+    assert gate.threshold_stats is not None
+    assert session.calls[0][1]["multiplier"] == 1.75
 
 
 # --------------------------------------------------------------- firing

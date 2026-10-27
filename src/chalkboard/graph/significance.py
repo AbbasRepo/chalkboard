@@ -19,6 +19,15 @@ Why a query rather than a fourth agent
   disagree with a model's intuition.
 * Demonstrable - the query and the subgraph it returned both go on screen.
 
+Dynamic threshold extraction
+----------------------------
+Rather than relying solely on a static magic number, the significance
+threshold can be computed deterministically from the statistical event rates
+in the graph (forced turnovers, line-breaking passes, and shot xG across all
+loaded matches) via the ``ESTIMATE_THRESHOLD`` Cypher query. This scales the
+expected score of a window by a configurable multiplier, adapting to the
+tempo and intensity of the loaded corpus while remaining 100% deterministic.
+
 Cooldown
 --------
 The window is 90 seconds and the gate runs every 3, so a single good passage
@@ -37,6 +46,13 @@ from pathlib import Path
 from typing import Any, Iterator, Protocol
 
 DEFAULT_CYPHER = Path(__file__).resolve().parents[3] / "ontology" / "significance.cypher"
+
+#: Fallback threshold when the graph is empty or no dynamic query is run.
+DEFAULT_THRESHOLD = 1.8
+
+#: Multiplier applied to the expected window score when deriving the
+#: threshold dynamically from global match statistics in the graph.
+THRESHOLD_MULTIPLIER = 1.5
 
 #: Seconds of match time the gate looks back over. A passage of play - a
 #: press, a build-up, a counter - takes about this long. Shorter and you see
@@ -58,6 +74,20 @@ MAX_EVIDENCE = 12
 
 class Session(Protocol):
     def run(self, query: str, **params: Any) -> Any: ...
+
+
+@dataclass
+class ThresholdStats:
+    """Statistical parameters extracted from the graph to derive the gate threshold."""
+
+    threshold: float
+    expected_window_score: float = 0.0
+    matches: int = 0
+    action_count: int = 0
+    forced_turnovers: int = 0
+    breaking_passes: int = 0
+    shot_count: int = 0
+    total_xg: float = 0.0
 
 
 @dataclass
@@ -110,10 +140,75 @@ class Moment:
         return (", ".join(parts) or "notable passage") + where
 
 
-def load_query(path: Path | str = DEFAULT_CYPHER) -> str:
+def load_queries(path: Path | str = DEFAULT_CYPHER) -> dict[str, str]:
+    """Load all named Cypher queries from the significance ontology file."""
+    text = Path(path).read_text(encoding="utf-8")
+    parts = re.split(r"^//\s*--name:\s*(\w+)\s*$", text, flags=re.MULTILINE)
+    queries: dict[str, str] = {}
+    for name, body in zip(parts[1::2], parts[2::2]):
+        body = body.strip().rstrip(";").strip()
+        if body:
+            queries[name] = body
+    return queries
+
+
+def load_query(path: Path | str = DEFAULT_CYPHER, name: str = "SCORE_WINDOW") -> str:
+    """Load a specific named query (defaults to ``SCORE_WINDOW``)."""
+    queries = load_queries(path)
+    if name in queries:
+        return queries[name]
     text = Path(path).read_text(encoding="utf-8")
     parts = re.split(r"^//\s*--name:\s*\w+\s*$", text, flags=re.MULTILINE)
     return parts[-1].strip().rstrip(";").strip()
+
+
+def load_threshold_query(path: Path | str = DEFAULT_CYPHER) -> str:
+    """Load the deterministic threshold estimation query from the ontology."""
+    return load_query(path, name="ESTIMATE_THRESHOLD")
+
+
+def estimate_threshold(
+    session: Session,
+    query: str | None = None,
+    window_s: float = WINDOW_S,
+    multiplier: float | None = None,
+    default: float = DEFAULT_THRESHOLD,
+) -> ThresholdStats:
+    """Compute the significance threshold deterministically from graph event rates.
+
+    Queries global match rates (forced turnovers, progressive line-breaking
+    passes, and cumulative shot xG) and scales the expected score of a window
+    by ``multiplier``. Falls back to ``default`` if the graph has no scored
+    events or returns no rows.
+    """
+    q = query if query is not None else load_threshold_query()
+    mult = (
+        multiplier
+        if multiplier is not None
+        else float(os.environ.get("SIGNIFICANCE_MULTIPLIER", str(THRESHOLD_MULTIPLIER)))
+    )
+    result = session.run(
+        q,
+        window=window_s,
+        multiplier=mult,
+        defaultThreshold=default,
+    )
+    rows = list(result)
+    if not rows or rows[0].get("threshold") is None:
+        return ThresholdStats(threshold=default)
+
+    row = rows[0]
+    raw_threshold = float(row["threshold"])
+    return ThresholdStats(
+        threshold=raw_threshold if raw_threshold > 0 else default,
+        expected_window_score=float(row.get("expected_window_score") or 0.0),
+        matches=int(row.get("matches") or 0),
+        action_count=int(row.get("action_count") or 0),
+        forced_turnovers=int(row.get("forced_turnovers") or 0),
+        breaking_passes=int(row.get("breaking_passes") or 0),
+        shot_count=int(row.get("shot_count") or 0),
+        total_xg=float(row.get("total_xg") or 0.0),
+    )
 
 
 class SignificanceGate:
@@ -125,18 +220,52 @@ class SignificanceGate:
         window_s: float = WINDOW_S,
         cooldown_s: float = COOLDOWN_S,
         max_evidence: int = MAX_EVIDENCE,
+        threshold_query: str | None = None,
+        multiplier: float | None = None,
     ) -> None:
         self.session = session
         self.query = query if query is not None else load_query()
-        self.threshold = (
-            threshold
-            if threshold is not None
-            else float(os.environ.get("SIGNIFICANCE_THRESHOLD", "1.8"))
-        )
         self.window_s = window_s
         self.cooldown_s = cooldown_s
         self.max_evidence = max_evidence
+        self.threshold_stats: ThresholdStats | None = None
+        self.threshold = self._resolve_threshold(
+            threshold=threshold,
+            query_was_custom=query is not None,
+            threshold_query=threshold_query,
+            multiplier=multiplier,
+        )
         self._last_fired_at: float | None = None
+
+    def _resolve_threshold(
+        self,
+        threshold: float | None,
+        query_was_custom: bool,
+        threshold_query: str | None,
+        multiplier: float | None,
+    ) -> float:
+        if threshold is not None:
+            return float(threshold)
+
+        env_val = (os.environ.get("SIGNIFICANCE_THRESHOLD") or "").strip()
+        if env_val and env_val.lower() not in ("auto", "dynamic"):
+            return float(env_val)
+
+        # When a caller supplies a custom scoring query string in isolation
+        # without a threshold_query (and without requesting "auto"), avoid
+        # consuming a mock session response intended for SCORE_WINDOW.
+        if query_was_custom and threshold_query is None and env_val.lower() not in ("auto", "dynamic"):
+            return DEFAULT_THRESHOLD
+
+        stats = estimate_threshold(
+            self.session,
+            query=threshold_query,
+            window_s=self.window_s,
+            multiplier=multiplier,
+            default=DEFAULT_THRESHOLD,
+        )
+        self.threshold_stats = stats
+        return stats.threshold
 
     def check(self, match_id: str, now_s: float) -> Moment | None:
         """Score the window ending at ``now_s``. Returns a Moment or nothing."""
@@ -200,7 +329,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--match", required=True)
     parser.add_argument("--until", type=float, default=5400.0,
                         help="match seconds to sweep to (default: full match)")
-    parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="explicit threshold (default: derived dynamically from graph)")
+    parser.add_argument("--multiplier", type=float, default=None,
+                        help="multiplier over expected window score for dynamic threshold")
     parser.add_argument("--cypher", default=str(DEFAULT_CYPHER))
     args = parser.parse_args(argv)
 
@@ -221,9 +353,28 @@ def main(argv: list[str] | None = None) -> int:
     fired = 0
     try:
         with driver.session() as session:
-            gate = SignificanceGate(session, load_query(args.cypher), args.threshold)
-            print(f"threshold {gate.threshold}  window {gate.window_s:g}s  "
-                  f"cooldown {gate.cooldown_s:g}s", file=sys.stderr)
+            queries = load_queries(args.cypher)
+            gate = SignificanceGate(
+                session,
+                query=queries.get("SCORE_WINDOW"),
+                threshold=args.threshold,
+                threshold_query=queries.get("ESTIMATE_THRESHOLD"),
+                multiplier=args.multiplier,
+            )
+            source = "dynamic" if gate.threshold_stats else "static"
+            stats_info = ""
+            if gate.threshold_stats:
+                s = gate.threshold_stats
+                stats_info = (
+                    f" (expected={s.expected_window_score:g}, matches={s.matches}, "
+                    f"actions={s.action_count}, forced={s.forced_turnovers}, "
+                    f"breaking={s.breaking_passes}, shots={s.shot_count}, xg={s.total_xg:g})"
+                )
+            print(
+                f"threshold {gate.threshold:g} [{source}]{stats_info}  "
+                f"window {gate.window_s:g}s  cooldown {gate.cooldown_s:g}s",
+                file=sys.stderr,
+            )
             for moment in gate.sweep(args.match, args.until):
                 fired += 1
                 minute = int(moment.clock_s // 60)
